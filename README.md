@@ -10,4 +10,4 @@ torch-geometric==2.1.0 <br>
 ## Run DGGAT
 python main.py -M cross_val -DM gate -O ./Out <br>
 python main.py -M train -DM gate -O ./Out <br>
-python main.py -M predict -DM gate --Device cuda -O ./Out --ModelPath ./model/model.bin
+python main.py -M predict -DM gate -O ./Out --ModelPath ./model/model.bin
