@@ -207,6 +207,3 @@ if __name__ == "__main__":
         model_path = args.ModelPath
         predict(data,Y,mask_all,args.DropMethod,outdir,model_path,data_dir)
 
-# python main.py -M cross_val -DM gate -O Out
-# python main.py -M train -DM gate -O Out
-# python main.py -M predict -DM gate --Device cuda -O Out --ModelPath Out/model_gate.bin # train_test_seed6666/model_55_gate.bin #
