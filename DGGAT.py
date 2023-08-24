@@ -14,10 +14,9 @@ import pandas as pd
 
 import torch.nn.functional as F
 import torch_geometric.transforms as T
-from torch_geometric.nn import ChebConv
+from torch_geometric.nn import ChebConv, VGAE
 
 from torch_geometric.utils import dropout_adj, negative_sampling, remove_self_loops, add_self_loops
-
 
 
 
@@ -26,12 +25,12 @@ class DGGAT(nn.Module):
     trg_nodes_dim = 1
     nodes_dim = 0
     gate_heads = 2
-    def __init__(self,gat1,temperature=0.2):
+    def __init__(self,input_dim,gat1,temperature=0.2):
         super(DGGAT, self).__init__()
         self.gat1 = gat1
-        self.gcn1 = ChebConv(64,300,K=2,normalization="sym")
-        self.skip = nn.Linear(64, 300)
-        self.linear_proj_gate = nn.Linear(64, self.gate_heads * 100)
+        self.gcn1 = ChebConv(input_dim,300,K=2,normalization="sym")
+        self.skip = nn.Linear(input_dim, 300)
+        self.linear_proj_gate = nn.Linear(input_dim, self.gate_heads * 100)
         self.scoring_fn_target_gate = nn.Parameter(torch.Tensor(1, self.gate_heads, 100))
         self.scoring_fn_source_gate = nn.Parameter(torch.Tensor(1, self.gate_heads, 100))
         self.temperature = temperature
@@ -110,4 +109,28 @@ class DGGAT(nn.Module):
         # Set gradients w.r.t. y_hard gradients w.r.t. y
         y_hard = (y_hard - y).detach() + y
         return y_hard
+    
 
+class VariationalGAE(torch.nn.Module):
+    def __init__(self,node_num, in_channels, out_channels):
+        super(VariationalGAE, self).__init__()
+        self.trans = nn.Linear(node_num,in_channels)
+        self.conv1 = ChebConv(in_channels, 2 * out_channels,K=2,normalization='sym') 
+        self.conv_mu = ChebConv(2 * out_channels, out_channels,K=2,normalization='sym')
+        self.conv_logstd = ChebConv(2 * out_channels, out_channels,K=2,normalization='sym')
+
+    def forward(self, x, edge_index):
+        x = self.trans(x).relu()
+        x = self.conv1(x, edge_index).relu()
+        return self.conv_mu(x, edge_index), self.conv_logstd(x, edge_index)
+
+class VGGNN(nn.Module):
+    def __init__(self,node_num,hidden_dim=128,z_dim=32) -> None:
+        super().__init__()
+        self.VGAE = VGAE(VariationalGAE(node_num,hidden_dim,z_dim))
+        self.node_num = node_num
+    def forward(self,x_adj, edge_index,neg_edge_index=None):
+        z = self.VGAE.encode(x_adj, edge_index)
+        loss = self.VGAE.recon_loss(z, edge_index,neg_edge_index)
+        loss = loss + (1 / self.node_num) * self.VGAE.kl_loss()
+        return z,loss
