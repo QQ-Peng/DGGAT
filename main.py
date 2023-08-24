@@ -12,6 +12,7 @@ from torch.optim import Adam
 
 import numpy as np
 import pandas as pd
+import networkx as nx
 
 import torch.nn.functional as F
 import torch_geometric.transforms as T
@@ -19,7 +20,7 @@ from torch_geometric.nn import ChebConv
 from torch_geometric.data import Data, DataLoader
 from torch_geometric.utils import dropout_adj, negative_sampling, remove_self_loops, add_self_loops
 from sklearn import metrics
-from DGGAT import DGGAT
+from DGGAT import DGGAT, VGGNN
 import argparse
 import random
 
@@ -59,15 +60,16 @@ def buid_GAT(log_weight=False):
     return gat
 
 def cross_val(EPOCH,data, Y,k_sets,dropmethod,outdir):
+
     AUC = np.zeros(shape=(10, 5))
     AUPR = np.zeros(shape=(10, 5))
 
     for i in range(10):
         for cv_run in range(5):
             gat1 = buid_GAT()
-            _, _, tr_mask, te_mask = k_sets[i][cv_run]
-            model = DGGAT(gat1).to(device)
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.0005)
+            tr_mask, te_mask = k_sets[i][cv_run]
+            model = DGGAT(64,gat1).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
             for epoch in range(0, EPOCH):
                 optimizer.zero_grad()
                 edge_index, pred_loss, pred = model(data, Y, tr_mask,dropmethod)
@@ -77,15 +79,15 @@ def cross_val(EPOCH,data, Y,k_sets,dropmethod,outdir):
             AUC[i][cv_run] = auc
             AUPR[i][cv_run] = aupr
             print(f"i: {i}, cv_run: {cv_run} done.")
-    np.save(f'{outdir}/AUC_{dropmethod}_{str(seed)}.npy',AUC)
-    np.save(f'{outdir}/AUPR_{dropmethod}_{str(seed)}.npy',AUPR)
+    np.save(f'{outdir}/AUC_{dropmethod}.npy',AUC)
+    np.save(f'{outdir}/AUPR_{dropmethod}.npy',AUPR)
 
 
 
 def train(EPOCH,data, Y,mask_all,dropmethod,outdir):
     same_seeds(6666)
     gat1 = buid_GAT()
-    model = DGGAT(gat1).to(device)
+    model = DGGAT(64,gat1).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0005)
     all_loss = []
     for epoch in range(1, EPOCH):
@@ -108,7 +110,7 @@ def predict(data, Y,mask_all,dropmethod,outdir,model_path,data_dir):
     device = Y.device
     weight = torch.load(model_path,map_location=torch.device('cpu'))
     gat1 = buid_GAT(True)
-    model = DGGAT(gat1).to(device)
+    model = DGGAT(64,gat1).to(device)
     model.load_state_dict(weight)
     model.eval()
     for i in range(100):
@@ -167,6 +169,7 @@ def predict(data, Y,mask_all,dropmethod,outdir,model_path,data_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--DataDir","-D", type=str, default='./data',help="Input Data Dir")
+    parser.add_argument("--dataset","-d", type=str, default='STRINGdb',help="CPDB, STRINGdb, IREF_2015, MULTINET, PCNET")
     parser.add_argument("--Device", type=str,default='cuda')
     parser.add_argument("--MaxEpoch", type=int,default=1000)
     parser.add_argument("--Mode", "-M",type=str,choices=['cross_val','train','predict'])
@@ -182,26 +185,60 @@ if __name__ == "__main__":
     mode = args.Mode
     Epoch = args.MaxEpoch
     outdir = args.OutDir
-    data = torch.load(f"{data_dir}/data_CPDB.pkl").to(device)
+    nk = args.dataset
 
     if not os.path.exists(outdir):
         os.mkdir(outdir)
 
+    
+
+    data = torch.load(f"{data_dir}/{nk}.pkl").to(device)
+    data.x = torch.from_numpy(data.x).float()
+    data.edge_index = torch.from_numpy(data.edge_index)
+    data.y = torch.from_numpy(data.y)
     data = data.to(device)
-    Y = torch.tensor(np.logical_or(data.y, data.y_te)).type(torch.FloatTensor).to(device)
-    y_all = np.logical_or(data.y, data.y_te)
-    mask_all = np.logical_or(data.mask, data.mask_te)
-    data.x = data.x[:, :48]
-    str_features = torch.load(f"{data_dir}/str_fearures.pkl",map_location=torch.device('cpu')).to(device)
-    data.x = torch.cat((data.x, str_features), 1)
-    data = data.to(device)
-    with open(f"{data_dir}/k_sets.pkl", 'rb') as handle:
+    Y = data.y.float().view(-1,1)
+    mask_all = data.mask
+    
+    pb, _ = remove_self_loops(data.edge_index)
+    pb, _ = add_self_loops(pb)
+
+    with open(f"{data_dir}/split_sets.pkl", 'rb') as handle:
         k_sets = pickle.load(handle)
+        k_sets = k_sets[nk]
+
+    # use VGAE to learn stucture features
+    adj = torch.zeros(data.x.shape[0],data.x.shape[0])
+    adj[data.edge_index[0],data.edge_index[1]] = 1
+    adj = adj.numpy()
+    Graph = nx.from_numpy_array(adj)
+    node_to_neighbor = {}
+    for i in range(adj.shape[0]):
+        node_to_neighbor[i] = list(Graph.neighbors(i))
+    x_adj = torch.zeros(data.x.shape[0],data.x.shape[0]).float()
+    for i in node_to_neighbor.keys():
+        x_adj[i,node_to_neighbor[i]] = 1.0
+    x_adj = x_adj.to(device)
+
+    data.x_adj = x_adj
+    model_z =VGGNN(data.x.shape[0],128, 16).to(device)
+    optimizer = torch.optim.Adam(model_z.parameters(), lr=0.001)
+    for e in range(1,1000+1):
+        optimizer.zero_grad()
+        z, loss = model_z(data.x_adj, data.edge_index)
+        loss.backward()
+        optimizer.step()
+        if e%50 ==  0:
+            print('epoch: {:03d}, loss: {:.4f}'.format(e, loss))
+    model_z.eval()
+    z,_ = model_z.forward(data.x_adj, data.edge_index)
+    z = z.detach()
+    
+    data.x = torch.cat([data.x,z],dim=1)
 
     if mode == 'cross_val':
         cross_val(Epoch,data,Y,k_sets,args.DropMethod,outdir)
     elif mode == 'train':
-        interval = args.CheckPointInterval
         train(Epoch,data,Y,mask_all,args.DropMethod,outdir)
     elif mode == 'predict':
         model_path = args.ModelPath
