@@ -22,7 +22,10 @@ Run split_cv.py
 ## Run DGGAT
 python main.py -M cross_val --DataDir ./data --dataset {network name} -DM gate -O ./Out <br>
 python main.py -M train --DataDir ./data --dataset {network name} -DM gate -O ./Out <br>
-python main.py -M predict --DataDir ./data --dataset {network name} -DM gate -O ./Out --ModelPath ./model/model_gate.bin
+python main.py -M predict --DataDir ./data --dataset {network name} -DM gate -O ./Out --ModelPath ./model/model_gate.bin <br>
+
+Example:
+python main.py -M cross_val --DataDir ./data --dataset STRINGdb -DM gate -O ./Out
 
 ## Implementation of gating GAT
 Our implementation of gating GAT is based on https://github.com/gordicaleksa/pytorch-GAT
