@@ -13,7 +13,7 @@ https://github.com/schulter/EMOGI
 
 ### Transform data
 Put all h5py network data into a folder. <br>
-Run data_transform.py
+Run data_transform.py for transforming the data to PyG Dataset container.
 
 ### Split the cross-validation set
 Run split_cv.py
